@@ -385,7 +385,7 @@ void GUIEngine::cloudPostProcess()
 
 	if (busytime_u32 < frametime_min) {
 		u32 sleeptime = frametime_min - busytime_u32;
-		RenderingEngine::get_raw_device()->sleep(sleeptime);
+		// RenderingEngine::get_raw_device()->sleep(sleeptime);
 	}
 }
 

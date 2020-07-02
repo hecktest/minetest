@@ -291,7 +291,7 @@ void MeshUpdateThread::doUpdate()
 			sleep_ms(m_generation_interval);
 		ScopeProfiler sp(g_profiler, "Client: Mesh making (sum)");
 
-		MapBlockMesh *mesh_new = new MapBlockMesh(q->data, m_camera_offset);
+		MapBlockMesh *mesh_new = new MapBlockMesh(q->data);
 
 		MeshUpdateResult r;
 		r.p = q->p;

@@ -22,8 +22,33 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "irrlichttypes_extrabloated.h"
 #include "map.h"
 #include "camera.h"
+#include "map_batch.h"
 #include <set>
 #include <map>
+
+// We need this to use a material hashmap.
+template<> struct std::hash<irr::video::SMaterial>
+{
+	size_t operator()(const irr::video::SMaterial& self) const
+	{
+		return // Just the data relevant to Minetest.
+			(size_t)self.getTexture(0) ^
+			((size_t)self.getTexture(1) << 3) ^
+			(size_t)self.ZWriteEnable << 11 ^
+			(size_t)self.Wireframe << 9;
+	}
+};
+// Make positions hashable.
+template<> struct std::hash<v3s16>
+{
+	size_t operator()(const v3s16& self) const
+	{
+		return
+			(((size_t)self.X + 0x8000) & 0xFFFF) ^
+			rollst(((size_t)self.Z + 0x8000) & 0xFFFF, 16) ^
+			rollst(((size_t)self.Y + 0x8000) & 0xFFFF, 32);
+	}
+};
 
 struct MapDrawControl
 {
@@ -65,9 +90,10 @@ public:
 		ISceneNode::drop();
 	}
 
-	void updateCamera(const v3f &pos, const v3f &dir, f32 fov, const v3s16 &offset)
+	void updateCamera(const v3f &pos, const v3f &dir, f32 fov, const v3s16 &offset, const aabb3f &box)
 	{
 		m_camera_position = pos;
+		m_camera_box = box;
 		m_camera_direction = dir;
 		m_camera_fov = fov;
 		m_camera_offset = offset;
@@ -109,7 +135,7 @@ public:
 	void renderPostFx(CameraMode cam_mode);
 
 	// For debug printing
-	virtual void PrintInfo(std::ostream &out);
+	// virtual void PrintInfo(std::ostream &out);
 
 	const MapDrawControl & getControl() const { return m_control; }
 	f32 getCameraFov() const { return m_camera_fov; }
@@ -122,15 +148,18 @@ private:
 	MapDrawControl &m_control;
 
 	v3f m_camera_position = v3f(0,0,0);
+	aabb3f m_camera_box;
 	v3f m_camera_direction = v3f(0,0,1);
 	f32 m_camera_fov = M_PI;
 	v3s16 m_camera_offset;
 
-	std::map<v3s16, MapBlock*> m_drawlist;
-
-	std::set<v2s16> m_last_drawn_sectors;
-
 	bool m_cache_trilinear_filter;
 	bool m_cache_bilinear_filter;
 	bool m_cache_anistropic_filter;
+	
+	std::unordered_map<video::SMaterial,std::unordered_map<v3s16, MapBatch*>*> m_batches;
+	
+	CullBuffer* m_vis_buffer;
+	
+	std::vector<MapBlock*> m_grabbed_blocks;
 };

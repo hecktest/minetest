@@ -93,7 +93,7 @@ class MapBlockMesh
 {
 public:
 	// Builds the mesh given
-	MapBlockMesh(MeshMakeData *data, v3s16 camera_offset);
+	MapBlockMesh(MeshMakeData *data);
 	~MapBlockMesh();
 
 	// Main animation function, parameters:
@@ -132,8 +132,6 @@ public:
 			m_animation_force_timer--;
 	}
 
-	void updateCameraOffset(v3s16 camera_offset);
-
 private:
 	scene::IMesh *m_mesh[MAX_TILE_LAYERS];
 	MinimapMapblock *m_minimap_mapblock;
@@ -168,9 +166,6 @@ private:
 	// of sunlit vertices
 	// Keys are pairs of (mesh index, buffer index in the mesh)
 	std::map<std::pair<u8, u32>, std::map<u32, video::SColor > > m_daynight_diffs;
-
-	// Camera offset info -> do we have to translate the mesh?
-	v3s16 m_camera_offset;
 };
 
 /*!

@@ -30,6 +30,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "util/basic_macros.h"
 #include <algorithm>
 #include "client/renderingengine.h"
+#include "client/mesh.h"
 
 ClientMap::ClientMap(
 		Client *client,
@@ -42,9 +43,6 @@ ClientMap::ClientMap(
 	m_client(client),
 	m_control(control)
 {
-	m_box = aabb3f(-BS*1000000,-BS*1000000,-BS*1000000,
-			BS*1000000,BS*1000000,BS*1000000);
-
 	/* TODO: Add a callback function so these can be updated when a setting
 	 *       changes.  At this point in time it doesn't matter (e.g. /set
 	 *       is documented to change server settings only)
@@ -57,7 +55,7 @@ ClientMap::ClientMap(
 	m_cache_trilinear_filter  = g_settings->getBool("trilinear_filter");
 	m_cache_bilinear_filter   = g_settings->getBool("bilinear_filter");
 	m_cache_anistropic_filter = g_settings->getBool("anisotropic_filter");
-
+	m_vis_buffer = new CullBuffer(160,120,32);
 }
 
 MapSector * ClientMap::emergeSector(v2s16 p2d)
@@ -114,14 +112,14 @@ void ClientMap::getBlocksInViewRange(v3s16 cam_pos_nodes,
 
 void ClientMap::updateDrawList()
 {
-	ScopeProfiler sp(g_profiler, "CM::updateDrawList()", SPT_AVG);
-
-	for (auto &i : m_drawlist) {
-		MapBlock *block = i.second;
-		block->refDrop();
-	}
-	m_drawlist.clear();
-
+	// ScopeProfiler _(g_profiler, "CM::updateDrawList()", SPT_AVG);
+	TimeTaker scope("updateDrawList scope");
+	std::string prefix = "updateDrawList: ";
+	
+	for (int i=0; i < m_grabbed_blocks.size(); i++ )
+		m_grabbed_blocks[i]->refDrop();
+	m_grabbed_blocks.clear();
+	
 	v3f camera_position = m_camera_position;
 	v3f camera_direction = m_camera_direction;
 	f32 camera_fov = m_camera_fov;
@@ -155,11 +153,21 @@ void ClientMap::updateDrawList()
 	// TODO: Include this as a flag for an extended debugging setting
 	//if (occlusion_culling_enabled && m_control.show_wireframe)
 	//    occlusion_culling_enabled = porting::getTimeS() & 1;
+	/*
+		Get animation parameters
+	*/
+	float animation_time = m_client->getAnimationTime();
+	int crack = m_client->getCrackLevel();
+	u32 daynight_ratio = m_client->getEnv().getDayNightRatio();
+	
+	u32 meshes_set = 0;
+	TimeTaker gather("Block gathering");
+	TimeTaker batch_notify("Batch updates");
 
 	for (const auto &sector_it : m_sectors) {
 		MapSector *sector = sector_it.second;
 		v2s16 sp = sector->getPos();
-
+		
 		if (!m_control.range_all) {
 			if (sp.X < p_blocks_min.X || sp.X > p_blocks_max.X ||
 					sp.Y < p_blocks_min.Z || sp.Y > p_blocks_max.Z)
@@ -180,54 +188,116 @@ void ClientMap::updateDrawList()
 				Compare block position to camera position, skip
 				if not seen on display
 			*/
-
-			if (block->mesh)
-				block->mesh->updateCameraOffset(m_camera_offset);
+						
 
 			float range = 100000 * BS;
 			if (!m_control.range_all)
 				range = m_control.wanted_range * BS;
 
-			float d = 0.0;
-			if (!isBlockInSight(block->getPos(), camera_position,
-					camera_direction, camera_fov, range, &d))
-				continue;
-
-
-			/*
-				Ignore if mesh doesn't exist
-			*/
-			if (!block->mesh)
-				continue;
-
-			blocks_in_range_with_mesh++;
-
-			/*
-				Occlusion culling
-			*/
-			if ((!m_control.range_all && d > m_control.wanted_range * BS) ||
-					(occlusion_culling_enabled && isBlockOccluded(block, cam_pos_nodes))) {
-				blocks_occlusion_culled++;
-				continue;
-			}
-
 			// This block is in range. Reset usage timer.
 			block->resetUsageTimer();
-
 			// Add to set
-			block->refGrab();
-			m_drawlist[block->getPos()] = block;
-
+			
+			v3s16 block_pos = block->getPos();
 			sector_blocks_drawn++;
-		} // foreach sectorblocks
+			
+			v3s16 batch_pos = v3s16(
+				( block_pos.X + (block_pos.X < 0) ) / BATCH_STRIDE - (block_pos.X < 0),
+				( block_pos.Y + (block_pos.Y < 0) ) / BATCH_STRIDE - (block_pos.Y < 0),
+				( block_pos.Z + (block_pos.Z < 0) ) / BATCH_STRIDE - (block_pos.Z < 0)
+			);
+			// operator % breaks with negative numbers
+			#define SMOD(l,r) (((l)%(r)+(r))%(r))
+			v3s16 local_pos = v3s16(
+				SMOD(block_pos.X, BATCH_STRIDE),
+				SMOD(block_pos.Y, BATCH_STRIDE),
+				SMOD(block_pos.Z, BATCH_STRIDE)
+			);
+			#undef SMOD
+			
+			// Swizzle the addressing so that even if a batch is forced
+			// to split, the pieces will be spatially compact.
+			// The next cell is always a neighbor of the last one.
+			s16 batch_cell = local_pos.Y * BATCH_STRIDE * BATCH_STRIDE;
+			
+			if (local_pos.Y % 2)
+				batch_cell += (BATCH_STRIDE - local_pos.Z - 1) * BATCH_STRIDE;
+			else
+				batch_cell += local_pos.Z * BATCH_STRIDE;
+			
+			if ((local_pos.Z + local_pos.Y) % 2)
+				batch_cell += BATCH_STRIDE - local_pos.X - 1;
+			else
+				batch_cell += local_pos.X;
+			
+			
+			MapBlockMesh *blockMesh = block->mesh;
+			
+			if (!blockMesh) {
+				// for (auto layer = m_batches.begin(); layer != m_batches.end(); ++layer) {
+					// for (auto batch = layer->second->begin(); batch != layer->second->end(); ++batch) {
+						// if (batch->first == batch_pos) {
+							// batch->second->setSourceMesh(batch_cell, NULL, v3f(0,0,0));
+						// }
+					// }
+				// }
+				continue;
+			}
+			
+			block->refGrab();
+			m_grabbed_blocks.push_back(block);
+			// For budgeting animations, and for profiling
+			/*
+			u32 mesh_animate_count = 0;
+			// Pretty random but this should work somewhat nicely
+			bool faraway = d >= BS * 50;
+			if (blockMesh->isAnimationForced() || !faraway ||
+					mesh_animate_count < (m_control.range_all ? 200 : 50)) {
 
-		if (sector_blocks_drawn != 0)
-			m_last_drawn_sectors.insert(sp);
+				bool animated = blockMesh->animate(faraway, animation_time,
+					crack, daynight_ratio);
+				if (animated)
+					mesh_animate_count++;
+			} else {
+				blockMesh->decreaseAnimationForceTimer();
+			}
+			g_profiler->avg("renderMap(): animated meshes [#]", mesh_animate_count);
+			*/
+			
+			for (int layer = 0; layer < MAX_TILE_LAYERS; layer++) {
+				scene::IMesh *mesh = blockMesh->getMesh(layer);
+				assert(mesh);
+
+				u32 c = mesh->getMeshBufferCount();
+				for (u32 i = 0; i < c; i++) {
+					scene::IMeshBuffer *buf = mesh->getMeshBuffer(i);
+
+					video::SMaterial& material = buf->getMaterial();
+					// Validate material layer
+					if (!m_batches[material]) {
+						m_batches[material] = new std::unordered_map<v3s16, MapBatch*>;
+					}
+
+					// Validate block batch
+					auto &map = *(m_batches[material]);
+					if (!map[batch_pos]) {
+						map[batch_pos] = new MapBatch(m_camera_offset, SceneManager);
+					}
+					
+					// Set the source mesh for the current block batch at this cell
+					if (map[batch_pos]->setSourceMesh(batch_cell, buf, intToFloat(local_pos * MAP_BLOCKSIZE * BS, 1)))
+						meshes_set++;
+				}
+			}
+		} // for blocks in sector
+	} // foreach sectorblocks
+	{
+		g_profiler->avg(prefix + "mapblocks updated [#]", meshes_set);
+		double batch_time = batch_notify.stop(true);
+		g_profiler->avg(prefix + "batch notification [ms]", batch_time);
+		g_profiler->avg(prefix + "block gathering [ms]", gather.stop(true) - batch_time);
+		g_profiler->avg("CM::updateDrawList", scope.stop(true));
 	}
-
-	g_profiler->avg("MapBlock meshes in range [#]", blocks_in_range_with_mesh);
-	g_profiler->avg("MapBlocks occlusion culled [#]", blocks_occlusion_culled);
-	g_profiler->avg("MapBlocks drawn [#]", m_drawlist.size());
 }
 
 struct MeshBufList
@@ -276,147 +346,113 @@ struct MeshBufListList
 
 void ClientMap::renderMap(video::IVideoDriver* driver, s32 pass)
 {
+	TimeTaker scope("renderMap scope");
+	
 	bool is_transparent_pass = pass == scene::ESNRP_TRANSPARENT;
-
+	
 	std::string prefix;
 	if (pass == scene::ESNRP_SOLID)
 		prefix = "renderMap(SOLID): ";
 	else
 		prefix = "renderMap(TRANSPARENT): ";
-
+	
 	/*
-		This is called two times per frame, reset on the non-transparent one
-	*/
-	if (pass == scene::ESNRP_SOLID)
-		m_last_drawn_sectors.clear();
+	if (!is_transparent_pass){
+		// TODO move this out again
+		u32 batches_remeshed = 0;
+		TimeTaker preprocess("Batch processing");
+		// Process batches:
+		//  Delete empty
+		//  Delete out of range
+		//	Remesh
+		//  Apply camera offset
+		for (auto layer = m_batches.begin(); layer != m_batches.end(); ++layer) {
+			for (auto batch = layer->second->begin(); batch != layer->second->end();) {
 
-	/*
-		Get animation parameters
-	*/
-	float animation_time = m_client->getAnimationTime();
-	int crack = m_client->getCrackLevel();
-	u32 daynight_ratio = m_client->getEnv().getDayNightRatio();
-
-	v3f camera_position = m_camera_position;
-	v3f camera_direction = m_camera_direction;
-	f32 camera_fov = m_camera_fov;
-
-	/*
-		Get all blocks and draw all visible ones
-	*/
-
-	u32 vertex_count = 0;
-
-	// For limiting number of mesh animations per frame
-	u32 mesh_animate_count = 0;
-	//u32 mesh_animate_count_far = 0;
-
-	/*
-		Draw the selected MapBlocks
-	*/
-
-	MeshBufListList drawbufs;
-
-	for (auto &i : m_drawlist) {
-		MapBlock *block = i.second;
-
-		// If the mesh of the block happened to get deleted, ignore it
-		if (!block->mesh)
-			continue;
-
-		float d = 0.0;
-		if (!isBlockInSight(block->getPos(), camera_position,
-				camera_direction, camera_fov, 100000 * BS, &d))
-			continue;
-
-		// Mesh animation
-		if (pass == scene::ESNRP_SOLID) {
-			//MutexAutoLock lock(block->mesh_mutex);
-			MapBlockMesh *mapBlockMesh = block->mesh;
-			assert(mapBlockMesh);
-			// Pretty random but this should work somewhat nicely
-			bool faraway = d >= BS * 50;
-			if (mapBlockMesh->isAnimationForced() || !faraway ||
-					mesh_animate_count < (m_control.range_all ? 200 : 50)) {
-
-				bool animated = mapBlockMesh->animate(faraway, animation_time,
-					crack, daynight_ratio);
-				if (animated)
-					mesh_animate_count++;
-			} else {
-				mapBlockMesh->decreaseAnimationForceTimer();
 			}
 		}
+		g_profiler->avg(prefix + "batches remeshed [#]", batches_remeshed);
+		g_profiler->avg(prefix + "batch processing [ms]", preprocess.stop(true));
 
-		/*
-			Get the meshbuffers of the block
-		*/
-		{
-			//MutexAutoLock lock(block->mesh_mutex);
-
-			MapBlockMesh *mapBlockMesh = block->mesh;
-			assert(mapBlockMesh);
-
-			for (int layer = 0; layer < MAX_TILE_LAYERS; layer++) {
-				scene::IMesh *mesh = mapBlockMesh->getMesh(layer);
-				assert(mesh);
-
-				u32 c = mesh->getMeshBufferCount();
-				for (u32 i = 0; i < c; i++) {
-					scene::IMeshBuffer *buf = mesh->getMeshBuffer(i);
-
-					video::SMaterial& material = buf->getMaterial();
-					video::IMaterialRenderer* rnd =
-						driver->getMaterialRenderer(material.MaterialType);
-					bool transparent = (rnd && rnd->isTransparent());
-					if (transparent == is_transparent_pass) {
-						if (buf->getVertexCount() == 0)
-							errorstream << "Block [" << analyze_block(block)
-								<< "] contains an empty meshbuf" << std::endl;
-
-						material.setFlag(video::EMF_TRILINEAR_FILTER,
-							m_cache_trilinear_filter);
-						material.setFlag(video::EMF_BILINEAR_FILTER,
-							m_cache_bilinear_filter);
-						material.setFlag(video::EMF_ANISOTROPIC_FILTER,
-							m_cache_anistropic_filter);
-						material.setFlag(video::EMF_WIREFRAME,
-							m_control.show_wireframe);
-
-						drawbufs.add(buf, layer);
+	}
+	*/
+	
+	
+	u32 block_buffers = 0;
+	u32 vertex_count = 0;
+	u32 batches_drawn = 0;
+	u32 culled = 0;
+	double drawcall_time = 0;
+	TimeTaker draw("Drawing mesh buffers");
+	// Push model matrix
+	core::matrix4 wmat_old = driver->getTransform(video::ETS_WORLD);
+	core::matrix4 m; // Per-block model matrix
+	core::matrix4 v = driver->getTransform(video::ETS_VIEW);
+	core::matrix4 p = driver->getTransform(video::ETS_PROJECTION);
+	core::matrix4 vp = p*v;
+	v3f offset = intToFloat(m_camera_offset, BS);
+	// Render all layers in order
+	for (auto layer = m_batches.begin(); layer != m_batches.end(); ++layer) {
+		video::SMaterial mat = layer->first;
+		bool transparent = driver->getMaterialRenderer(mat.MaterialType)->isTransparent();
+		if ( transparent == is_transparent_pass ) {
+			mat.setFlag(video::EMF_TRILINEAR_FILTER, m_cache_trilinear_filter);
+			mat.setFlag(video::EMF_BILINEAR_FILTER, m_cache_bilinear_filter);
+			mat.setFlag(video::EMF_ANISOTROPIC_FILTER, m_cache_anistropic_filter);
+			mat.setFlag(video::EMF_WIREFRAME, m_control.show_wireframe);
+			driver->setMaterial(mat);
+			for (auto batch = layer->second->begin(); batch != layer->second->end();) {
+				v3f bpos = intToFloat(
+					batch->first * MAP_BLOCKSIZE * BATCH_STRIDE +
+					MAP_BLOCKSIZE * BATCH_STRIDE / 2, BS);
+				float range = ( m_control.wanted_range + MAP_BLOCKSIZE * BATCH_STRIDE ) * BS;
+				float sqrRange = range * range;
+				float sqrDist = (bpos - m_camera_position).getLengthSQ();
+				bool empty = batch->second->mesh_count == 0;
+				v3f position = intToFloat(batch->first * BATCH_STRIDE * MAP_BLOCKSIZE, BS) - offset;
+				if (empty|| (!m_control.range_all && sqrDist > sqrRange)) {
+					delete batch->second;
+					layer->second->erase(batch++);
+				} else {
+					m.setTranslation(position);
+					// driver->draw3DBox(batch->second->occludee.bounds);
+					batch->second->update();					
+					if (batch->second->occludee.visible(vp*m,position,m_camera_position - offset,*m_vis_buffer)) {
+						driver->setTransform(video::ETS_WORLD, m);
+						for (auto mesh : batch->second->mesh_bufs) {
+							auto vcount = mesh->getVertexCount();
+							g_profiler->avg(prefix + "verts per batch [#]", vcount);
+							vertex_count += vcount;
+							batches_drawn++;
+							block_buffers += batch->second->mesh_count;
+							TimeTaker drawCall( "Drawcalls" );
+							driver->drawMeshBuffer(mesh);
+							drawcall_time += drawCall.stop(true);
+						}
+					} else {
+						culled++;
 					}
+					++batch;
 				}
 			}
 		}
 	}
-
-	TimeTaker draw("Drawing mesh buffers");
-
-	// Render all layers in order
-	for (auto &lists : drawbufs.lists) {
-		for (MeshBufList &list : lists) {
-			// Check and abort if the machine is swapping a lot
-			if (draw.getTimerTime() > 2000) {
-				infostream << "ClientMap::renderMap(): Rendering took >2s, " <<
-						"returning." << std::endl;
-				return;
-			}
-			driver->setMaterial(list.m);
-
-			for (scene::IMeshBuffer *buf : list.bufs) {
-				driver->drawMeshBuffer(buf);
-				vertex_count += buf->getVertexCount();
-			}
-		}
+	// Pop model matrix
+	driver->setTransform(video::ETS_WORLD, wmat_old);
+	
+	if (pass != scene::ESNRP_SOLID) {
+		// Uncomment this to see my awful rasterizer at work
+		// m_vis_buffer->draw( driver );
+		m_vis_buffer->clear();
 	}
-	g_profiler->avg(prefix + "draw meshes [ms]", draw.stop(true));
-
-	// Log only on solid pass because values are the same
-	if (pass == scene::ESNRP_SOLID) {
-		g_profiler->avg("renderMap(): animated meshes [#]", mesh_animate_count);
-	}
-
-	g_profiler->avg(prefix + "vertices drawn [#]", vertex_count);
+	
+	g_profiler->avg(prefix + "drawcalls [ms]", drawcall_time);
+	g_profiler->avg(prefix + "frustum culled [#]", culled);
+	g_profiler->avg(prefix + "draw setup [ms]", draw.stop(true) - drawcall_time);
+	g_profiler->avg(prefix + "verts total [#]", vertex_count);
+	g_profiler->avg(prefix + "batches drawn [#]", batches_drawn);
+	g_profiler->avg(prefix + "batches drawn [#]", batches_drawn);
+	g_profiler->avg("CM::renderMap", scope.stop(true) * 2);
 }
 
 static bool getVisibleBrightness(Map *map, const v3f &p0, v3f dir, float step,
@@ -604,9 +640,9 @@ void ClientMap::renderPostFx(CameraMode cam_mode)
 	}
 }
 
-void ClientMap::PrintInfo(std::ostream &out)
-{
-	out<<"ClientMap: ";
-}
+// void ClientMap::PrintInfo(std::ostream &out)
+// {
+	// out<<"ClientMap: ";
+// }
 
 

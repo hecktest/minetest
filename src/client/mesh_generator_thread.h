@@ -117,7 +117,6 @@ public:
 	// update for the block at p
 	void updateBlock(Map *map, v3s16 p, bool ack_block_to_server, bool urgent);
 
-	v3s16 m_camera_offset;
 	MutexedQueue<MeshUpdateResult> m_queue_out;
 
 private:

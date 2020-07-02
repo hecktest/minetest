@@ -110,7 +110,7 @@ bool ClientLauncher::run(GameParams &game_params, const Settings &cmd_args)
 		This changes the minimum allowed number of vertices in a VBO.
 		Default is 500.
 	*/
-	//driver->setMinHardwareBufferVertexCount(50);
+	RenderingEngine::get_video_driver()->setMinHardwareBufferVertexCount(5);
 
 	// Create game callback for menus
 	g_gamecallback = new MainGameCallback();

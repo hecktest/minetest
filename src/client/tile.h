@@ -295,6 +295,22 @@ struct TileLayer
 	u8 scale;
 };
 
+template<> struct std::hash<TileLayer>
+{
+	size_t operator()(const TileLayer& self) const
+	{
+		return
+			(size_t)self.texture_id ^
+			rollst(self.shader_id, 11) ^
+			rollst(self.animation_frame_count, 16) ^
+			rollst(self.material_type, 13) ^
+			rollst(self.material_flags, 19) ^
+			rollst(self.scale, 24) ^
+			rollst(self.color.color, 32) ^
+			rollst(self.has_color, 31);
+	}
+};
+
 /*!
  * Defines a face of a node. May have up to two layers.
  */
@@ -328,3 +344,17 @@ struct TileSpec
 };
 
 std::vector<std::string> getTextureDirs();
+
+template<> struct std::hash<TileSpec>
+{
+	size_t operator()(const TileSpec& self) const
+	{
+		size_t r =	(size_t)self.rotation |
+					rollst(self.emissive_light,8) |
+					rollst(self.world_aligned,9);
+		for (size_t i = 0; i < MAX_TILE_LAYERS; i++)
+			r = r ^ rollst(std::hash<TileLayer>()(self.layers[i]),i*32);
+		return r;
+	}
+};
+

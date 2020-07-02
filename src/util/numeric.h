@@ -442,3 +442,13 @@ inline irr::video::SColor multiplyColorValue(const irr::video::SColor &color, fl
 			core::clamp<u32>(color.getGreen() * mod, 0, 255),
 			core::clamp<u32>(color.getBlue() * mod, 0, 255));
 }
+
+// Safe size_t left rotate (for stl hashes)
+// Rotation allows a hash to work on both 32 and 64 bit machines.
+// This *should* compile to a roll opcode.
+// https://blog.regehr.org/archives/1063
+inline size_t rollst(size_t x, size_t n)
+{
+	return x << n | (x>>(-n&(sizeof(size_t)-1)));
+}
+

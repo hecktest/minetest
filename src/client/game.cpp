@@ -2974,15 +2974,15 @@ void Game::updateCamera(u32 busy_time, f32 dtime)
 	v3f camera_direction = camera->getDirection();
 	f32 camera_fov = camera->getFovMax();
 	v3s16 camera_offset = camera->getOffset();
+	aabb3f camera_frustum_bounds = camera->getCameraNode()->getViewFrustum()->getBoundingBox();
 
 	m_camera_offset_changed = (camera_offset != old_camera_offset);
 
 	if (!m_flags.disable_camera_update) {
 		client->getEnv().getClientMap().updateCamera(camera_position,
-				camera_direction, camera_fov, camera_offset);
+				camera_direction, camera_fov, camera_offset, camera_frustum_bounds);
 
 		if (m_camera_offset_changed) {
-			client->updateCameraOffset(camera_offset);
 			client->getEnv().updateCameraOffset(camera_offset);
 
 			if (clouds)
@@ -3866,13 +3866,13 @@ void Game::updateFrame(ProfilerGraph *graph, RunStats *stats, f32 dtime,
 	runData.update_draw_list_timer += dtime;
 
 	v3f camera_direction = camera->getDirection();
-	if (runData.update_draw_list_timer >= 0.2
-			|| runData.update_draw_list_last_cam_dir.getDistanceFrom(camera_direction) > 0.2
-			|| m_camera_offset_changed) {
+	// if (runData.update_draw_list_timer >= 0.2
+			// || runData.update_draw_list_last_cam_dir.getDistanceFrom(camera_direction) > 0.2
+			// || m_camera_offset_changed) {
 		runData.update_draw_list_timer = 0;
 		client->getEnv().getClientMap().updateDrawList();
 		runData.update_draw_list_last_cam_dir = camera_direction;
-	}
+	// }
 
 	m_game_ui->update(*stats, client, draw_control, cam, runData.pointed_old, gui_chat_console, dtime);
 

@@ -38,14 +38,21 @@ void applyFacesShading(video::SColor &color, const v3f &normal);
 scene::IAnimatedMesh* createCubeMesh(v3f scale);
 
 /*
+	Create a mesh buffer using a given vertex type.
+*/
+scene::IMeshBuffer* createMeshBufferFromType(video::E_VERTEX_TYPE type);
+
+/*
 	Multiplies each vertex coordinate by the specified scaling factors
 	(componentwise vector multiplication).
 */
+void scaleMeshBuffer(scene::IMeshBuffer *mesh, v3f scale);
 void scaleMesh(scene::IMesh *mesh, v3f scale);
 
 /*
 	Translate each vertex coordinate by the specified vector.
 */
+void translateMeshBuffer(scene::IMeshBuffer *mesh, v3f vec);
 void translateMesh(scene::IMesh *mesh, v3f vec);
 
 /*!
@@ -95,6 +102,11 @@ void rotateMeshBy6dFacedir(scene::IMesh *mesh, int facedir);
 void rotateMeshXYby (scene::IMesh *mesh, f64 degrees);
 void rotateMeshXZby (scene::IMesh *mesh, f64 degrees);
 void rotateMeshYZby (scene::IMesh *mesh, f64 degrees);
+
+/*
+ *  Append src to dst.
+ */
+void appendMeshBuffer(scene::IMeshBuffer *dst, scene::IMeshBuffer *src);
 
 /*
  *  Clone the mesh buffer.

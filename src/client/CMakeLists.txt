@@ -49,6 +49,8 @@ set(client_SRCS
 	${CMAKE_CURRENT_SOURCE_DIR}/keycode.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/localplayer.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/mapblock_mesh.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/map_batch.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/culling.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/mesh.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/mesh_generator_thread.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/minimap.cpp

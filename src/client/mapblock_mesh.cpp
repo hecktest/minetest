@@ -1023,7 +1023,7 @@ static void applyTileColor(PreMeshBuffer &pmb)
 	MapBlockMesh
 */
 
-MapBlockMesh::MapBlockMesh(MeshMakeData *data, v3s16 camera_offset):
+MapBlockMesh::MapBlockMesh(MeshMakeData *data):
 	m_minimap_mapblock(NULL),
 	m_tsrc(data->m_client->getTextureSource()),
 	m_shdrsrc(data->m_client->getShaderSource()),
@@ -1207,6 +1207,7 @@ MapBlockMesh::MapBlockMesh(MeshMakeData *data, v3s16 camera_offset):
 				buf->Material = material;
 				buf->append(&p.vertices[0], p.vertices.size(),
 					&p.indices[0], p.indices.size());
+				buf->recalculateBoundingBox();
 				mesh->addMeshBuffer(buf);
 				buf->drop();
 			}
@@ -1215,9 +1216,6 @@ MapBlockMesh::MapBlockMesh(MeshMakeData *data, v3s16 camera_offset):
 		/*
 			Do some stuff to the mesh
 		*/
-		m_camera_offset = camera_offset;
-		translateMesh(m_mesh[layer],
-			intToFloat(data->m_blockpos * MAP_BLOCKSIZE - camera_offset, BS));
 
 		if (m_use_tangent_vertices) {
 			scene::IMeshManipulator* meshmanip =
@@ -1234,8 +1232,8 @@ MapBlockMesh::MapBlockMesh(MeshMakeData *data, v3s16 camera_offset):
 #endif
 
 			// Use VBO for mesh (this just would set this for ever buffer)
-			if (m_enable_vbo)
-				m_mesh[layer]->setHardwareMappingHint(scene::EHM_STATIC);
+			// if (m_enable_vbo)
+				// m_mesh[layer]->setHardwareMappingHint(scene::EHM_STATIC);
 		}
 	}
 
@@ -1349,19 +1347,6 @@ bool MapBlockMesh::animate(bool faraway, float time, int crack,
 	}
 
 	return true;
-}
-
-void MapBlockMesh::updateCameraOffset(v3s16 camera_offset)
-{
-	if (camera_offset != m_camera_offset) {
-		for (scene::IMesh *layer : m_mesh) {
-			translateMesh(layer,
-				intToFloat(m_camera_offset - camera_offset, BS));
-			if (m_enable_vbo)
-				layer->setDirty();
-		}
-		m_camera_offset = camera_offset;
-	}
 }
 
 video::SColor encode_light(u16 light, u8 emissive_light)
